@@ -16,8 +16,7 @@ Stability, compatibility, and long-term maintenance are not guaranteed.
 
 ## AI-assisted Development
 
-Portions of this project were developed with the assistance of AI tools.
-All code has been reviewed and tested by the author before publication.
+Portions of this project were developed with the assistance of AI tools (ChatGPT).
 
 ## Contributions
 
@@ -39,9 +38,13 @@ Please feel free to fork the project if you would like to experiment or build up
 ## Requirements
 
 - Android 8.0 or newer
+- ARM64 Processor (Other Architectures may also work but not tested)
 - Microphone permission
 - Audio input/output device  
   (built-in audio or external USB sound card recommended)
+- Processor performance comparable to or higher than Qualcomm Snapdragon 845.
+  - The application was developed and tested on this platform.  
+  Other devices may also work, but have not been formally tested.
 
 ## Usage
 
