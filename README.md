@@ -1,6 +1,7 @@
 # FreeDV-RADEV1-Android
 
 
+[![Build Signed Android Release](https://github.com/byf3332/FreeDV-RADEV1-Android/actions/workflows/android-release.yml/badge.svg)](https://github.com/byf3332/FreeDV-RADEV1-Android/actions/workflows/android-release.yml)
 
 Use your Android device as a **RADE V1 digital voice modem** (encode and decode).
 
