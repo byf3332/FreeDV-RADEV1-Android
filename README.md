@@ -50,15 +50,14 @@ Please feel free to fork the project if you would like to experiment or build up
 
 ## Usage
 
-1. Connect your radio or audio interface
-2. Grant microphone and notification permissions
-3. Connect your radio's audio interface
-4. Press **REFRESH AUDIO DEVICES**
-5. Select audio devices
-6. Press **START SESSION**
-7. Hold down **PTT** to transmit (Blue=Preparing, Green=Transmitting)
-8. Monitor MIC LEVEL during transmit to prevent overload
-9. Monitor sync and SNR status during receive. Press **RESYNC RX** in case of losing synchronization
+1. Grant microphone and notification permissions
+2. Connect your radio's audio interface
+3. Press **REFRESH AUDIO DEVICES**
+4. Select audio devices
+5. Press **START SESSION**
+6. Hold down **PTT** to transmit (Blue=Preparing, Green=Transmitting)
+7. Monitor MIC LEVEL during transmit to prevent overload
+8. Monitor sync and SNR status during receive. Press **RESYNC RX** in case of losing synchronization
 
 ## Third-party code
 
