@@ -50,7 +50,7 @@ jobs:
       - name: Print signing certificate
         shell: bash
         run: |
-          keytool -printcert -jarfile app/build/outputs/apk/release/app-release.apk
+          apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
