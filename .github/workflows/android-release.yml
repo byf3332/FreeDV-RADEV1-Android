@@ -2,6 +2,12 @@ name: Build Signed Android Release
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.0)"
+        required: true
+        default: "v1.0"
+
   push:
     tags:
       - "v*"
@@ -14,6 +20,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Determine tag name
+        id: tag
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -47,10 +63,13 @@ jobs:
           ls -R app/build/outputs/apk || true
           test -f app/build/outputs/apk/release/app-release.apk
 
-      - name: Print signing certificate
+      - name: Verify APK signing
         shell: bash
         run: |
-          apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk
+          BUILD_TOOLS=$(ls $ANDROID_HOME/build-tools | sort -V | tail -n 1)
+          $ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner verify \
+            --print-certs \
+            app/build/outputs/apk/release/app-release.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -59,7 +78,7 @@ jobs:
           path: app/build/outputs/apk/release/app-release.apk
 
       - name: Publish Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: always()
         uses: softprops/action-gh-release@v2
         with:
           files: app/build/outputs/apk/release/app-release.apk
