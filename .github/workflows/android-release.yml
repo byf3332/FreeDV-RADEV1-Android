@@ -78,7 +78,9 @@ jobs:
           path: app/build/outputs/apk/release/app-release.apk
 
       - name: Publish Release
-        if: always()
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
           files: app/build/outputs/apk/release/app-release.apk
+          overwrite_files: true
