@@ -1,5 +1,7 @@
 # FreeDV-RADEV1-Android
 
+
+
 Use your Android device as a **RADE V1 digital voice modem** (encode and decode).
 
 This project implements a real-time RADE V1 modem on Android using native C code
@@ -51,12 +53,12 @@ Please feel free to fork the project if you would like to experiment or build up
 1. Connect your radio or audio interface
 2. Grant microphone and notification permissions
 3. Connect your radio's audio interface
-3. Press **REFRESH AUDIO DEVICES**
-4. Select audio devices
-4. Press **START SESSION**
-5. Hold down **PTT** to transmit (Blue=Preparing, Green=Transmitting)
-6. Monitor MIC LEVEL during transmit to prevent overload
-7. Monitor sync and SNR status during receive. Press **RESYNC RX** in case of losing synchronization
+4. Press **REFRESH AUDIO DEVICES**
+5. Select audio devices
+6. Press **START SESSION**
+7. Hold down **PTT** to transmit (Blue=Preparing, Green=Transmitting)
+8. Monitor MIC LEVEL during transmit to prevent overload
+9. Monitor sync and SNR status during receive. Press **RESYNC RX** in case of losing synchronization
 
 ## Third-party code
 
@@ -73,6 +75,11 @@ app/src/main/cpp/THIRD_PARTY_LICENSES/
 
 for license details.
 
+
 ## License
 
 This project is licensed under the BSD 2-Clause License.
+
+## Disclaimer
+
+This project is not affiliated with or endorsed by the FreeDV or Codec2 development teams.
