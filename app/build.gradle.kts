@@ -25,19 +25,26 @@ android {
         }
     }
 
-    signingConfigs {
-        create("release") {
-            val storeFilePath = System.getenv("SIGNING_STORE_FILE")
+    val signingStoreFile = System.getenv("SIGNING_STORE_FILE")
+    val signingStorePassword = System.getenv("SIGNING_STORE_PASSWORD")
+    val signingKeyAlias = System.getenv("SIGNING_KEY_ALIAS")
+    val signingKeyPassword = System.getenv("SIGNING_KEY_PASSWORD")
 
-            if (!storeFilePath.isNullOrBlank()) {
-                storeFile = file(storeFilePath)
-                storePassword = System.getenv("SIGNING_STORE_PASSWORD")
-                keyAlias = System.getenv("SIGNING_KEY_ALIAS")
-                keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
+    val hasCiSigning =
+        !signingStoreFile.isNullOrBlank() &&
+                !signingStorePassword.isNullOrBlank() &&
+                !signingKeyAlias.isNullOrBlank() &&
+                !signingKeyPassword.isNullOrBlank()
+
+    signingConfigs {
+        if (hasCiSigning) {
+            create("release") {
+                storeFile = file(signingStoreFile!!)
+                storePassword = signingStorePassword
+                keyAlias = signingKeyAlias
+                keyPassword = signingKeyPassword
                 storeType = "PKCS12"
-                println("Using CI release signing config: $storeFilePath")
-            } else {
-                println("SIGNING_STORE_FILE not set; release signing config not loaded")
+                println("Using CI release signing config: $signingStoreFile")
             }
         }
     }
@@ -49,7 +56,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+
+            if (hasCiSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                println("CI signing variables not found; release build will be unsigned locally")
+            }
         }
     }
 
