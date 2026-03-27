@@ -21,31 +21,45 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: "17"
 
       - name: Restore signing key
+        shell: bash
         run: |
-          mkdir signing
+          mkdir -p signing
           echo "${{ secrets.SIGNING_KEY_BASE64 }}" | base64 -d > signing/release.p12
+          ls -l signing
 
       - name: Make gradlew executable
-        run: chmod +x gradlew
+        run: chmod +x ./gradlew
 
-      - name: Build signed APK
+      - name: Build signed release APK
         env:
+          SIGNING_STORE_FILE: ${{ github.workspace }}/signing/release.p12
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
-        run: ./gradlew assembleRelease
+        run: ./gradlew clean assembleRelease --stacktrace
+
+      - name: Verify APK exists
+        shell: bash
+        run: |
+          ls -R app/build/outputs/apk || true
+          test -f app/build/outputs/apk/release/app-release.apk
+
+      - name: Print signing certificate
+        shell: bash
+        run: |
+          keytool -printcert -jarfile app/build/outputs/apk/release/app-release.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: release-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: app/build/outputs/apk/release/app-release.apk
 
       - name: Publish Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/release/*.apk
+          files: app/build/outputs/apk/release/app-release.apk
