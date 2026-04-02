@@ -62,7 +62,7 @@ static void tx_queue_pop80(short* out80) {
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_com_byf3332_radexcvr_MainActivity_startTxMic(
+Java_com_byf3332_radexcvr_NativeRadioBridge_startTxMic(
         JNIEnv*,
         jobject)
 {
@@ -118,7 +118,7 @@ Java_com_byf3332_radexcvr_MainActivity_startTxMic(
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_com_byf3332_radexcvr_MainActivity_processTxMicFrame(
+Java_com_byf3332_radexcvr_NativeRadioBridge_processTxMicFrame(
         JNIEnv* env,
         jobject,
         jshortArray inputSpeech160,
@@ -168,7 +168,7 @@ Java_com_byf3332_radexcvr_MainActivity_processTxMicFrame(
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_byf3332_radexcvr_MainActivity_stopTx(
+Java_com_byf3332_radexcvr_NativeRadioBridge_stopTx(
         JNIEnv*,
         jobject)
 {
@@ -218,6 +218,9 @@ static int g_rx_nfeatures = 0;
 
 static RADE_COMP* g_rx_in_buf = nullptr;
 static float* g_rx_features = nullptr;
+static float g_rx_manual_offset_hz = 0.0f;
+static float g_rx_shift_phase = 0.0f;
+static float g_rx_shift_phase_inc = 0.0f;
 
 static short g_rx_in_queue[80 * 64];
 static int g_rx_in_queue_len = 0;
@@ -268,7 +271,7 @@ static void rx_out_pop160(short* out160) {
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_com_byf3332_radexcvr_MainActivity_startRxAudio(
+Java_com_byf3332_radexcvr_NativeRadioBridge_startRxAudio(
         JNIEnv*,
         jobject)
 {
@@ -301,6 +304,8 @@ Java_com_byf3332_radexcvr_MainActivity_startRxAudio(
 
     fargan_init(&g_fargan);
     memset(g_warmup, 0, sizeof(g_warmup));
+    g_rx_shift_phase = 0.0f;
+    g_rx_shift_phase_inc = 2.0f * (float)M_PI * g_rx_manual_offset_hz / 8000.0f;
 
     g_rx_fargan_ready = 0;
     g_rx_warm_count = 0;
@@ -313,7 +318,7 @@ Java_com_byf3332_radexcvr_MainActivity_startRxAudio(
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_com_byf3332_radexcvr_MainActivity_processRxBasebandFrame(
+Java_com_byf3332_radexcvr_NativeRadioBridge_processRxBasebandFrame(
         JNIEnv* env,
         jobject,
         jshortArray inputBaseband80,
@@ -330,9 +335,14 @@ Java_com_byf3332_radexcvr_MainActivity_processRxBasebandFrame(
     short bb960[960];
     if (rx_in_pop960(bb960)) {
         for (int i = 0; i < 960; ++i) {
-            g_rx_in_buf[i].real = pcm16_to_float(bb960[i]);
-            g_rx_in_buf[i].imag = 0.0f;
+            float x = pcm16_to_float(bb960[i]);
+            float phase = g_rx_shift_phase + g_rx_shift_phase_inc * i;
+            g_rx_in_buf[i].real = x * cosf(phase);
+            g_rx_in_buf[i].imag = x * sinf(phase);
         }
+        g_rx_shift_phase += g_rx_shift_phase_inc * 960.0f;
+        while (g_rx_shift_phase > (float)M_PI) g_rx_shift_phase -= 2.0f * (float)M_PI;
+        while (g_rx_shift_phase < -(float)M_PI) g_rx_shift_phase += 2.0f * (float)M_PI;
 
         int has_eoo_out = 0;
         float eoo_out[64] = {0};
@@ -385,7 +395,7 @@ Java_com_byf3332_radexcvr_MainActivity_processRxBasebandFrame(
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_byf3332_radexcvr_MainActivity_stopRx(
+Java_com_byf3332_radexcvr_NativeRadioBridge_stopRx(
         JNIEnv*,
         jobject)
 {
@@ -419,7 +429,7 @@ Java_com_byf3332_radexcvr_MainActivity_stopRx(
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_byf3332_radexcvr_MainActivity_resetRxNative(
+Java_com_byf3332_radexcvr_NativeRadioBridge_resetRxNative(
         JNIEnv*,
         jobject)
 {
@@ -430,7 +440,7 @@ Java_com_byf3332_radexcvr_MainActivity_resetRxNative(
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_com_byf3332_radexcvr_MainActivity_getRxSyncNative(
+Java_com_byf3332_radexcvr_NativeRadioBridge_getRxSyncNative(
         JNIEnv*,
         jobject)
 {
@@ -440,10 +450,32 @@ Java_com_byf3332_radexcvr_MainActivity_getRxSyncNative(
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_com_byf3332_radexcvr_MainActivity_getRxSnrNative(
+Java_com_byf3332_radexcvr_NativeRadioBridge_getRxSnrNative(
         JNIEnv*,
         jobject)
 {
     if (g_rx_r == nullptr) return 0;
     return rade_snrdB_3k_est(g_rx_r);
+}
+
+
+extern "C"
+JNIEXPORT jfloat JNICALL
+Java_com_byf3332_radexcvr_NativeRadioBridge_getRxFreqOffsetNative(
+        JNIEnv*,
+        jobject)
+{
+    if (g_rx_r == nullptr) return 0.0f;
+    return rade_freq_offset(g_rx_r);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_byf3332_radexcvr_NativeRadioBridge_setRxManualOffsetNative(
+        JNIEnv*,
+        jobject,
+        jfloat offsetHz)
+{
+    g_rx_manual_offset_hz = offsetHz;
+    g_rx_shift_phase_inc = 2.0f * (float)M_PI * g_rx_manual_offset_hz / 8000.0f;
 }

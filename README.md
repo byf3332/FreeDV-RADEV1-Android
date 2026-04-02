@@ -62,18 +62,8 @@ Please feel free to fork the project if you would like to experiment or build up
 
 ## Third-party code
 
-This project includes native code derived from:
-
-RADAE reference implementation  
-https://github.com/peterbmarks/radae_nopy
-
-Licensed under the BSD 2-Clause License.
-
-See:
-
-app/src/main/cpp/THIRD_PARTY_LICENSES/
-
-for license details.
+Third-party attributions and license summaries are maintained in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 
 ## License

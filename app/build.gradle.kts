@@ -11,8 +11,8 @@ android {
         applicationId = "com.byf3332.radexcvr"
         minSdk = 27
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1.0"
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -56,6 +56,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("debug")
 
             if (hasCiSigning) {
                 signingConfig = signingConfigs.getByName("release")
@@ -68,6 +69,12 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 }
@@ -89,4 +96,5 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("com.github.mik3y:usb-serial-for-android:3.9.0")
 }
