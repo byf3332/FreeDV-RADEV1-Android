@@ -58,7 +58,7 @@ Please feel free to fork the project if you would like to experiment or build up
 3. Open **Settings**
 4. In **Audio**, press **REFRESH** and select TX / RX audio devices
 5. In **Radio Control**, choose the control mode you want
-   - `VOX`
+   - `VOX` (CAN CAUSE SYNC AND DELAY ISSUE, IF NOT NEEDED, DON'T USE)
    - `CAT`
    - `RTS`
    - `DTR`
