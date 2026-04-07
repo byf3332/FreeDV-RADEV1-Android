@@ -761,31 +761,6 @@ class RadioSessionController(
                 addLog("SERIAL CTRL DTR FAILED ${error.message ?: "unknown error"}")
             }
     }
-    fun pulseSerialRtsTest() {
-        if (!usbSerialController.isOpen()) return
-        scope.launch {
-            _uiState.update { it.copy(rigPttActive = true, rigStatusText = "RTS test running") }
-            addLog("PTT TEST RTS ON")
-            setSerialRts(true)
-            delay(500)
-            setSerialRts(false)
-            _uiState.update { it.copy(rigPttActive = false, rigStatusText = "RTS test complete") }
-            addLog("PTT TEST RTS OFF")
-        }
-    }
-    fun pulseSerialDtrTest() {
-        if (!usbSerialController.isOpen()) return
-        scope.launch {
-            _uiState.update { it.copy(rigPttActive = true, rigStatusText = "DTR test running") }
-            addLog("PTT TEST DTR ON")
-            setSerialDtr(true)
-            delay(500)
-            setSerialDtr(false)
-            _uiState.update { it.copy(rigPttActive = false, rigStatusText = "DTR test complete") }
-            addLog("PTT TEST DTR OFF")
-        }
-    }
-
     fun pulseRigPttTest() {
         if (!usbSerialController.isOpen()) {
             _uiState.update { it.copy(rigStatusText = "Open a serial device before testing PTT") }
@@ -857,6 +832,7 @@ class RadioSessionController(
         }
         _uiState.update { it.copy(rigFrequencyText = sanitized) }
     }
+
     fun sendRigFrequency() {
         val mhz = _uiState.value.rigFrequencyText.toDoubleOrNull()
         val freq = mhz?.times(1_000_000.0)?.toLong()
@@ -1306,6 +1282,55 @@ class RadioSessionController(
         return String.format("%.6f", freqHz / 1_000_000.0)
             .trimEnd('0')
             .trimEnd('.')
+    }
+
+    private fun maidenheadToLatLon(grid: String): Pair<Double, Double>? {
+        val normalized = grid.uppercase()
+        if (normalized.length < 4) return null
+        if (!normalized[0].isLetter() || !normalized[1].isLetter()) return null
+        if (!normalized[2].isDigit() || !normalized[3].isDigit()) return null
+
+        var lon = (normalized[0] - 'A') * 20.0 - 180.0
+        var lat = (normalized[1] - 'A') * 10.0 - 90.0
+        lon += (normalized[2] - '0') * 2.0
+        lat += (normalized[3] - '0') * 1.0
+        var lonSize = 2.0
+        var latSize = 1.0
+
+        if (normalized.length >= 6 &&
+            normalized[4].isLetter() &&
+            normalized[5].isLetter()
+        ) {
+            lon += (normalized[4] - 'A') * (5.0 / 60.0)
+            lat += (normalized[5] - 'A') * (2.5 / 60.0)
+            lonSize = 5.0 / 60.0
+            latSize = 2.5 / 60.0
+        }
+
+        return (lat + latSize / 2.0) to (lon + lonSize / 2.0)
+    }
+
+    private fun haversineKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val r = 6371.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = kotlin.math.sin(dLat / 2).let { it * it } +
+            kotlin.math.cos(Math.toRadians(lat1)) *
+            kotlin.math.cos(Math.toRadians(lat2)) *
+            kotlin.math.sin(dLon / 2).let { it * it }
+        val c = 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
+        return r * c
+    }
+
+    private fun bearingDegrees(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val phi1 = Math.toRadians(lat1)
+        val phi2 = Math.toRadians(lat2)
+        val deltaLon = Math.toRadians(lon2 - lon1)
+        val y = kotlin.math.sin(deltaLon) * kotlin.math.cos(phi2)
+        val x = kotlin.math.cos(phi1) * kotlin.math.sin(phi2) -
+            kotlin.math.sin(phi1) * kotlin.math.cos(phi2) * kotlin.math.cos(deltaLon)
+        val bearing = Math.toDegrees(kotlin.math.atan2(y, x))
+        return (bearing + 360.0) % 360.0
     }
 
     private fun connectSelectedRigProfileIfPossible() {

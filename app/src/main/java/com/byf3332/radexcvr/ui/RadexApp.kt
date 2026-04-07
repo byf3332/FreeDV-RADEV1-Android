@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +30,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -50,6 +52,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.TextStyle
@@ -120,8 +123,6 @@ fun RadexApp(
                         onRigProfileSelected = controller::onRigProfileSelected,
                         onUsbSerialDeviceSelected = controller::onUsbSerialDeviceSelected,
                         onSerialBaudRateSelected = controller::onSerialBaudRateSelected,
-                        onSerialRtsTest = controller::pulseSerialRtsTest,
-                        onSerialDtrTest = controller::pulseSerialDtrTest,
                         onTestPtt = controller::pulseRigPttTest,
                         onRigFrequencyTextChanged = controller::onRigFrequencyTextChanged,
                         onSendRigFrequency = controller::sendRigFrequency,
@@ -322,8 +323,6 @@ private fun SettingsPage(
     onRigProfileSelected: (String) -> Unit,
     onUsbSerialDeviceSelected: (String) -> Unit,
     onSerialBaudRateSelected: (Int) -> Unit,
-    onSerialRtsTest: () -> Unit,
-    onSerialDtrTest: () -> Unit,
     onTestPtt: () -> Unit,
     onRigFrequencyTextChanged: (String) -> Unit,
     onSendRigFrequency: () -> Unit,
@@ -500,111 +499,93 @@ private fun SettingsPage(
                     }
                 }
 
-                if (state.rigControlMode == RigControlMode.CAT) {
+                if (state.rigControlMode != RigControlMode.VOX) {
+                    if (state.rigControlMode == RigControlMode.CAT) {
+                        Text(
+                            text = "Rig Profile",
+                            color = Color(0xFF12202F),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        RigProfileSelector(
+                            selectedLabel = state.selectedRigProfileLabel,
+                            options = state.rigProfiles,
+                            onSelected = onRigProfileSelected
+                        )
+                        Text(
+                            text = state.rigStatusText,
+                            color = if (state.rigConnected) Color(0xFF246B3D) else Color(0xFF5C7388),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            text = "CI-V / address: ${state.rigCivAddress.ifBlank { "N/A" }}",
+                            color = Color(0xFF5C7388),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        androidx.compose.material3.OutlinedTextField(
+                            value = state.rigFrequencyText,
+                            onValueChange = onRigFrequencyTextChanged,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Rig frequency (MHz)") },
+                            singleLine = true
+                        )
+                        Text(
+                            text = state.rigCurrentFreqHz?.let { "Rig reports %.6f MHz".format(it / 1_000_000.0) } ?: "Rig frequency not read yet",
+                            color = Color(0xFF5C7388),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedButton(
+                            onClick = onSendRigFrequency,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("SET FREQ")
+                        }
+                    }
+
                     Text(
-                        text = "Rig Profile",
+                        text = state.usbSerialDiscoveryStatus,
+                        color = Color(0xFF5C7388),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+
+                    BaudRateSelector(
+                        selectedBaudRate = state.serialBaudRate,
+                        enabled = true,
+                        onSelected = onSerialBaudRateSelected
+                    )
+
+                    Text(
+                        text = state.serialPortStatus,
+                        color = if (state.serialPortOpen) Color(0xFF246B3D) else Color(0xFF5C7388),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+
+                    OutlinedButton(
+                        onClick = onTestPtt,
+                        enabled = state.serialPortOpen,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("TEST PTT")
+                    }
+
+                    Text(
+                        text = "Detected Serial Devices",
                         color = Color(0xFF12202F),
                         style = MaterialTheme.typography.titleMedium
                     )
-                    RigProfileSelector(
-                        selectedLabel = state.selectedRigProfileLabel,
-                        options = state.rigProfiles,
-                        onSelected = onRigProfileSelected
-                    )
-                    Text(
-                        text = state.rigStatusText,
-                        color = if (state.rigConnected) Color(0xFF246B3D) else Color(0xFF5C7388),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        text = "CI-V / address: ${state.rigCivAddress.ifBlank { "N/A" }}",
-                        color = Color(0xFF5C7388),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    androidx.compose.material3.OutlinedTextField(
-                        value = state.rigFrequencyText,
-                        onValueChange = onRigFrequencyTextChanged,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Rig frequency (MHz)") },
-                        singleLine = true
-                    )
-                    Text(
-                        text = state.rigCurrentFreqHz?.let { "Rig reports %.6f MHz".format(it / 1_000_000.0) } ?: "Rig frequency not read yet",
-                        color = Color(0xFF5C7388),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    OutlinedButton(
-                        onClick = onSendRigFrequency,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("SET FREQ")
-                    }
-                }
-
-                Text(
-                    text = state.usbSerialDiscoveryStatus,
-                    color = Color(0xFF5C7388),
-                    style = MaterialTheme.typography.bodySmall
-                )
-
-                BaudRateSelector(
-                    selectedBaudRate = state.serialBaudRate,
-                    enabled = true,
-                    onSelected = onSerialBaudRateSelected
-                )
-
-                Text(
-                    text = state.serialPortStatus,
-                    color = if (state.serialPortOpen) Color(0xFF246B3D) else Color(0xFF5C7388),
-                    style = MaterialTheme.typography.bodySmall
-                )
-
-                OutlinedButton(
-                    onClick = onTestPtt,
-                    enabled = state.serialPortOpen,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("TEST PTT")
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = onSerialRtsTest,
-                        enabled = state.serialPortOpen,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("RTS TEST")
-                    }
-                    OutlinedButton(
-                        onClick = onSerialDtrTest,
-                        enabled = state.serialPortOpen,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("DTR TEST")
-                    }
-                }
-
-                Text(
-                    text = "Detected Serial Devices",
-                    color = Color(0xFF12202F),
-                    style = MaterialTheme.typography.titleMedium
-                )
-                if (state.usbSerialDevices.isEmpty()) {
-                    Text(
-                        text = "No supported USB serial devices detected.",
-                        color = Color(0xFF5C7388),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                } else {
-                    state.usbSerialDevices.forEach { device ->
-                        UsbSerialCard(
-                            option = device,
-                            selected = state.selectedUsbSerialDeviceKey == device.key,
-                            onSelect = { onUsbSerialDeviceSelected(device.key) }
+                    if (state.usbSerialDevices.isEmpty()) {
+                        Text(
+                            text = "No supported USB serial devices detected.",
+                            color = Color(0xFF5C7388),
+                            style = MaterialTheme.typography.bodyMedium
                         )
+                    } else {
+                        state.usbSerialDevices.forEach { device ->
+                            UsbSerialCard(
+                                option = device,
+                                selected = state.selectedUsbSerialDeviceKey == device.key,
+                                onSelect = { onUsbSerialDeviceSelected(device.key) }
+                            )
+                        }
                     }
                 }
             }
