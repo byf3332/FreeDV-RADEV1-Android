@@ -45,7 +45,9 @@ class FreeDvReporterClient(private val scope: CoroutineScope) {
         val lastTx: String,
         val connectTime: String,
         val lastRxCallsign: String,
-        val snr: String
+        val snr: String,
+        val lastRxEpochMs: Long,
+        val lastRxHasValidCallsign: Boolean
     )
 
     private val _connected = MutableStateFlow(false)
@@ -246,7 +248,9 @@ class FreeDvReporterClient(private val scope: CoroutineScope) {
                     lastTx = old?.lastTx ?: "",
                     connectTime = obj.optString("connect_time", old?.connectTime ?: ""),
                     lastRxCallsign = old?.lastRxCallsign ?: "",
-                    snr = old?.snr ?: ""
+                    snr = old?.snr ?: "",
+                    lastRxEpochMs = old?.lastRxEpochMs ?: 0L,
+                    lastRxHasValidCallsign = old?.lastRxHasValidCallsign ?: false
                 )
             }
             "freq_change" -> {
@@ -274,7 +278,9 @@ class FreeDvReporterClient(private val scope: CoroutineScope) {
                 map[sid] = old.copy(
                     lastUpdate = obj.optString("last_update", old.lastUpdate),
                     lastRxCallsign = obj.optString("callsign", old.lastRxCallsign),
-                    snr = snrText
+                    snr = snrText,
+                    lastRxEpochMs = System.currentTimeMillis(),
+                    lastRxHasValidCallsign = obj.optString("callsign", old.lastRxCallsign).trim().isNotEmpty()
                 )
             }
             "message_update" -> {
