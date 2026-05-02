@@ -259,6 +259,7 @@ class RadioSessionController(
     @Volatile private var mode = SessionMode.IDLE
     @Volatile private var switchToken = 0L
     @Volatile private var lastRxStatsUpdateMs = 0L
+    @Volatile private var reporterRxSyncReportCounter = 0
     @Volatile private var smoothedMicDb = -50.0
     @Volatile private var txAgcGain = 1.0
     @Volatile private var manualRxOffsetHz = 0
@@ -1464,6 +1465,22 @@ class RadioSessionController(
         publishMeter(meter)
     }
 
+    private fun maybeEmitReporterSyncedSnr(sync: Int, snr: Int?) {
+        if (sync == 0 || snr == null) {
+            reporterRxSyncReportCounter = 0
+            return
+        }
+        if (!_uiState.value.reporterEnabled || !_reporterUiState.value.connected) return
+        val freqHz = currentReporterFrequencyHz()
+        if (freqHz == null || freqHz <= 0L) return
+
+        // Match FreeDV desktop RADE behavior: in sync, periodically report RX SNR with empty callsign.
+        reporterRxSyncReportCounter = (reporterRxSyncReportCounter + 1) % 10
+        if (reporterRxSyncReportCounter == 0) {
+            reporterClient.emitRxReport("", snr, "RADEV1")
+        }
+    }
+
     private fun updateSessionUi(
         sessionRunning: Boolean,
         startEnabled: Boolean,
@@ -2139,6 +2156,7 @@ class RadioSessionController(
                             nativeBridge.getRxFreqOffsetNative()
                         }
                         publishRxStats(sync, snr, freqOffset)
+                        maybeEmitReporterSyncedSnr(sync, snr)
                     }
 
                     pushWaterfallLine(captureSpectrumLine())
@@ -2153,7 +2171,14 @@ class RadioSessionController(
                     addLog("EOO callsign decoded: $normalizedCallsign")
                     _uiState.update { it.copy(eooRxCallsignDisplay = normalizedCallsign) }
                     val snrForReport = synchronized(nativeRxLock) { nativeBridge.getRxSnrNative() }
-                    reporterClient.emitRxReport(normalizedCallsign, snrForReport, "RADEV1")
+                    val freqHz = currentReporterFrequencyHz()
+                    if (_uiState.value.reporterEnabled &&
+                        _reporterUiState.value.connected &&
+                        freqHz != null &&
+                        freqHz > 0L
+                    ) {
+                        reporterClient.emitRxReport(normalizedCallsign, snrForReport, "RADEV1")
+                    }
                 }
 
                 try {

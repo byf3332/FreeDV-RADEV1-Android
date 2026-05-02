@@ -40,6 +40,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -53,7 +54,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -75,6 +78,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.isActive
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.rememberUpdatedState
+import android.view.MotionEvent
 
 @Composable
 fun RadexApp(
@@ -180,10 +184,14 @@ private fun HomePage(
     onPttReleased: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var pttTouchActive by remember { mutableStateOf(false) }
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(
+                state = rememberScrollState(),
+                enabled = !pttTouchActive
+            )
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -325,14 +333,20 @@ private fun HomePage(
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        PttButton(
-            enabled = state.pttEnabled,
-            color = Color(state.pttColorArgb),
-            onPressed = onPttPressed,
-            onReleased = onPttReleased
-        )
-    }
-}
+                PttButton(
+                    enabled = state.pttEnabled,
+                    color = Color(state.pttColorArgb),
+                    onPressed = {
+                        pttTouchActive = true
+                        onPttPressed()
+                    },
+                    onReleased = {
+                        pttTouchActive = false
+                        onPttReleased()
+                    }
+                )
+            }
+        }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -1382,26 +1396,59 @@ private fun RepeatAdjustButton(
 }
 
 @Composable
+@OptIn(ExperimentalComposeUiApi::class)
 private fun PttButton(
     enabled: Boolean,
     color: Color,
     onPressed: () -> Unit,
     onReleased: () -> Unit
 ) {
+    var pressed by remember { mutableStateOf(false) }
+    DisposableEffect(enabled) {
+        if (!enabled && pressed) {
+            pressed = false
+            onReleased()
+        }
+        onDispose {
+            if (pressed) {
+                pressed = false
+                onReleased()
+            }
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(120.dp)
             .background(color, shape = MaterialTheme.shapes.large)
-            .pointerInput(enabled) {
-                detectTapGestures(
-                    onPress = {
-                        if (!enabled) return@detectTapGestures
-                        onPressed()
-                        tryAwaitRelease()
-                        onReleased()
+            .pointerInteropFilter { event ->
+                if (!enabled) return@pointerInteropFilter false
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        if (!pressed) {
+                            pressed = true
+                            onPressed()
+                        }
+                        true
                     }
-                )
+                    MotionEvent.ACTION_MOVE -> true
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                        if (pressed) {
+                            pressed = false
+                            onReleased()
+                        }
+                        true
+                    } 
+                    MotionEvent.ACTION_CANCEL -> {
+                        if (pressed) {
+                            pressed = false
+                            onReleased()
+                        }
+                        true
+                    }
+                    else -> true
+                }
             },
         contentAlignment = Alignment.Center
     ) {
