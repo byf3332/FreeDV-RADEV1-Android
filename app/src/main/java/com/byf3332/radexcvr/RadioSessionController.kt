@@ -437,6 +437,8 @@ class RadioSessionController(
                 if (connected) {
                     emitReporterFrequencySnapshot()
                     reporterClient.emitTxReport("RADEV1", false)
+                    // Keep "Send to publish" UX, but restore the last user-sent intent after reconnect.
+                    reporterClient.emitMessageUpdate(_uiState.value.reporterMessage)
                 }
             }
         }
