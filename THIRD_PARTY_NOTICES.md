@@ -35,7 +35,7 @@ Included Components
   - Upstream: RADE_decode_Android
   - Repository: https://github.com/pepefrog1234/RADE_decode_Android
   - Author: RADE_decode_Android contributors
-  - License: MIT
+  - License: LGPL v2.1
 
 - usb-serial-for-android
   - Source: Gradle dependency `com.github.mik3y:usb-serial-for-android:3.9.0`
