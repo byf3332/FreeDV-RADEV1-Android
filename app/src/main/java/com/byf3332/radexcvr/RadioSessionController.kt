@@ -39,6 +39,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.nio.charset.StandardCharsets
@@ -117,7 +124,8 @@ data class ReporterStationUi(
     val lastTx: String,
     val lastRxCallsign: String,
     val snr: String,
-    val lastUpdate: String
+    val lastUpdate: String,
+    val rxActive: Boolean
 )
 
 data class ReporterUiState(
@@ -140,6 +148,7 @@ data class AppUiState(
     val selectorsEnabled: Boolean = true,
     val refreshEnabled: Boolean = true,
     val syncStatus: String = "SEARCHING",
+    val eooRxCallsignDisplay: String = "",
     val pttColorArgb: Int = 0xFF9E9E9E.toInt(),
     val mode: SessionMode = SessionMode.IDLE,
     val rxSnrDb: Int? = null,
@@ -227,6 +236,7 @@ class RadioSessionController(
         val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
         pInfo.versionName ?: "dev"
     }.getOrDefault("dev")
+    private val reporterDisplayTimeFormatter = DateTimeFormatter.ofPattern("MM/dd/yy HH:mm:ss", Locale.US)
     private val usbSerialController = UsbSerialController(usbManager)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val reporterClient = FreeDvReporterClient(scope)
@@ -433,6 +443,10 @@ class RadioSessionController(
         scope.launch(Dispatchers.Default) {
             reporterClient.stations.collect { map ->
                 val rawRows = map.values.map { s ->
+                    val now = System.currentTimeMillis()
+                    val rxAgeMs = if (s.lastRxEpochMs > 0L) now - s.lastRxEpochMs else Long.MAX_VALUE
+                    val rxActiveTimeoutMs = if (s.lastRxHasValidCallsign) 20_000L else 5_000L
+                    val rxActive = !s.transmitting && !s.rxOnly && rxAgeMs <= rxActiveTimeoutMs
                     ReporterStationUi(
                         sid = s.sid,
                         callsign = s.callsign,
@@ -449,7 +463,8 @@ class RadioSessionController(
                         lastTx = s.lastTx,
                         lastRxCallsign = s.lastRxCallsign,
                         snr = s.snr,
-                        lastUpdate = s.lastUpdate
+                        lastUpdate = formatReporterTimestamp(s.lastUpdate),
+                        rxActive = rxActive
                     )
                 }
 
@@ -1185,6 +1200,7 @@ class RadioSessionController(
             rxSnrDb = null,
             rxFreqOffsetHz = null
         )
+        _uiState.update { it.copy(eooRxCallsignDisplay = "") }
         _meterState.value = MeterUiState()
 
         addLog("Session stopped")
@@ -1221,6 +1237,7 @@ class RadioSessionController(
             txReleaseInProgress = false
             switchToken++
         }
+        _uiState.update { it.copy(eooRxCallsignDisplay = "") }
         emitReporterFrequencySnapshot()
 
         val token = switchToken
@@ -1551,6 +1568,39 @@ class RadioSessionController(
         currentReporterFrequencyHz()?.let { reporterClient.emitFreqChange(it) }
     }
 
+    private fun formatReporterTimestamp(raw: String): String {
+        val value = raw.trim()
+        if (value.isBlank()) return value
+
+        val zone = ZoneId.systemDefault()
+        val patterns = listOf(
+            "MM/dd/yy HH:mm:ss",
+            "MM/dd/yyyy HH:mm:ss",
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy/MM/dd HH:mm:ss"
+        )
+
+        patterns.forEach { pattern ->
+            runCatching {
+                val dt = LocalDateTime.parse(value, DateTimeFormatter.ofPattern(pattern, Locale.US))
+                return dt.format(reporterDisplayTimeFormatter)
+            }
+        }
+        runCatching {
+            val dt = OffsetDateTime.parse(value)
+            return dt.atZoneSameInstant(zone).toLocalDateTime().format(reporterDisplayTimeFormatter)
+        }
+        runCatching {
+            val dt = ZonedDateTime.parse(value)
+            return dt.withZoneSameInstant(zone).toLocalDateTime().format(reporterDisplayTimeFormatter)
+        }
+        runCatching {
+            val dt = Instant.parse(value)
+            return dt.atZone(zone).toLocalDateTime().format(reporterDisplayTimeFormatter)
+        }
+        return value
+    }
+
     private fun ft8CnControlMode(mode: RigControlMode): Int {
         return when (mode) {
             RigControlMode.VOX -> com.bg7yoz.ft8cn.database.ControlMode.VOX
@@ -1564,55 +1614,6 @@ class RadioSessionController(
         return String.format("%.6f", freqHz / 1_000_000.0)
             .trimEnd('0')
             .trimEnd('.')
-    }
-
-    private fun maidenheadToLatLon(grid: String): Pair<Double, Double>? {
-        val normalized = grid.uppercase()
-        if (normalized.length < 4) return null
-        if (!normalized[0].isLetter() || !normalized[1].isLetter()) return null
-        if (!normalized[2].isDigit() || !normalized[3].isDigit()) return null
-
-        var lon = (normalized[0] - 'A') * 20.0 - 180.0
-        var lat = (normalized[1] - 'A') * 10.0 - 90.0
-        lon += (normalized[2] - '0') * 2.0
-        lat += (normalized[3] - '0') * 1.0
-        var lonSize = 2.0
-        var latSize = 1.0
-
-        if (normalized.length >= 6 &&
-            normalized[4].isLetter() &&
-            normalized[5].isLetter()
-        ) {
-            lon += (normalized[4] - 'A') * (5.0 / 60.0)
-            lat += (normalized[5] - 'A') * (2.5 / 60.0)
-            lonSize = 5.0 / 60.0
-            latSize = 2.5 / 60.0
-        }
-
-        return (lat + latSize / 2.0) to (lon + lonSize / 2.0)
-    }
-
-    private fun haversineKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
-        val r = 6371.0
-        val dLat = Math.toRadians(lat2 - lat1)
-        val dLon = Math.toRadians(lon2 - lon1)
-        val a = kotlin.math.sin(dLat / 2).let { it * it } +
-            kotlin.math.cos(Math.toRadians(lat1)) *
-            kotlin.math.cos(Math.toRadians(lat2)) *
-            kotlin.math.sin(dLon / 2).let { it * it }
-        val c = 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
-        return r * c
-    }
-
-    private fun bearingDegrees(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
-        val phi1 = Math.toRadians(lat1)
-        val phi2 = Math.toRadians(lat2)
-        val deltaLon = Math.toRadians(lon2 - lon1)
-        val y = kotlin.math.sin(deltaLon) * kotlin.math.cos(phi2)
-        val x = kotlin.math.cos(phi1) * kotlin.math.sin(phi2) -
-            kotlin.math.sin(phi1) * kotlin.math.cos(phi2) * kotlin.math.cos(deltaLon)
-        val bearing = Math.toDegrees(kotlin.math.atan2(y, x))
-        return (bearing + 360.0) % 360.0
     }
 
     private fun connectSelectedRigProfileIfPossible() {
@@ -2146,9 +2147,11 @@ class RadioSessionController(
                 }
                 val rxCallsign = synchronized(nativeRxLock) { nativeBridge.pollRxCallsign() }
                 if (!rxCallsign.isNullOrBlank()) {
-                    addLog("EOO callsign decoded: $rxCallsign")
+                    val normalizedCallsign = rxCallsign.trim().uppercase()
+                    addLog("EOO callsign decoded: $normalizedCallsign")
+                    _uiState.update { it.copy(eooRxCallsignDisplay = normalizedCallsign) }
                     val snrForReport = synchronized(nativeRxLock) { nativeBridge.getRxSnrNative() }
-                    reporterClient.emitRxReport(rxCallsign, snrForReport, "RADEV1")
+                    reporterClient.emitRxReport(normalizedCallsign, snrForReport, "RADEV1")
                 }
 
                 try {

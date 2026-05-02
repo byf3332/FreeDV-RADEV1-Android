@@ -223,10 +223,16 @@ private fun HomePage(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                val statusHeadline = state.eooRxCallsignDisplay.ifBlank { state.syncStatus }
+                val statusColor = if (state.eooRxCallsignDisplay.isNotBlank()) {
+                    Color(0xFF246B3D)
+                } else {
+                    syncColor(state.syncStatus)
+                }
                 Text(
-                    text = state.syncStatus,
+                    text = statusHeadline,
                     style = MaterialTheme.typography.headlineSmall,
-                    color = syncColor(state.syncStatus)
+                    color = statusColor
                 )
 
                 MeterBlock(
@@ -1040,7 +1046,7 @@ private fun ReporterPage(
                                 val rowBackground = when {
                                     isPink -> Color(0xFFD28CD5)
                                     row.status == "TX" -> Color(0xFFFF5400)
-                                    row.status == "RX" -> Color(0xFF43A6BD)
+                                    row.status == "RX" && row.rxActive -> Color(0xFF43A6BD)
                                     else -> Color(0xFFFFFFFF)
                                 }
 
@@ -1081,7 +1087,7 @@ private fun ReporterPage(
                                 val rowBackground = when {
                                     isPink -> Color(0xFFD28CD5)
                                     row.status == "TX" -> Color(0xFFFF5400)
-                                    row.status == "RX" -> Color(0xFF43A6BD)
+                                    row.status == "RX" && row.rxActive -> Color(0xFF43A6BD)
                                     else -> Color(0xFFFFFFFF)
                                 }
 
