@@ -30,6 +30,13 @@ Included Components
   - Author: FT8CN contributors
   - License: MIT
 
+- RADE_decode_Android EOO callsign codec integration
+  - Source: EOO callsign codec sources under `app/src/main/cpp/eoo`
+  - Upstream: RADE_decode_Android
+  - Repository: https://github.com/pepefrog1234/RADE_decode_Android
+  - Author: RADE_decode_Android contributors
+  - License: MIT
+
 - usb-serial-for-android
   - Source: Gradle dependency `com.github.mik3y:usb-serial-for-android:3.9.0`
   - Upstream: https://github.com/mik3y/usb-serial-for-android

@@ -37,6 +37,11 @@ Please feel free to fork the project if you would like to experiment or build up
 - USB serial radio control
   - CAT control
   - RTS / DTR line PTT control
+- FreeDV Reporter integration
+  - Station list view with status color states
+  - EOO Callsign ecoding and decoding
+  - Callsign / grid / message reporting
+  - RX-only reporting mode
 - Foreground keep-alive service with wakelock
 
 ## Requirements
@@ -70,6 +75,24 @@ Please feel free to fork the project if you would like to experiment or build up
    - Green: transmitting
 10. Monitor MIC level during transmit and RX sync / SNR / frequency offset during receive, adjust frequency offset if needed
 11. Use **RESYNC RX** if synchronization is lost and don't come back in sync
+
+## Reporter
+
+The **Reporter** page can connect to the FreeDV Reporter network and publish your
+station status.
+
+- Enable switch controls Reporter connection state
+- Callsign / Grid Square / Message fields are editable only when Reporter is enabled
+- Message is sent only when **SEND** is pressed
+  - Sending an empty message clears the remote message
+- `RX Only` can be toggled only while Reporter is enabled
+- Frequency reporting behavior:
+  - In `CAT` mode: frequency is taken from rig control
+  - In `VOX` / `RTS` / `DTR` modes: frequency is set from Reporter page preset/manual input
+  - Frequency is reported on connect and on PTT press
+- Reporter mode is currently hardcoded as `RADEV1`
+- Reporter version is reported as `RADEXCVR/<app version>`
+- EOO callsign signaling is disabled when Reporter is off
 
 ## Third-party code
 

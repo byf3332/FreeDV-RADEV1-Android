@@ -43,7 +43,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.Alignment
@@ -81,6 +83,7 @@ fun RadexApp(
 ) {
     val state by controller.uiState.collectAsState()
     val meterState by controller.meterState.collectAsState()
+    val reporterState by controller.reporterUiState.collectAsState()
 
     RADEXCVRTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
@@ -132,6 +135,20 @@ fun RadexApp(
                         modifier = Modifier.padding(padding)
                     )
 
+                    AppPage.REPORTER -> ReporterPage(
+                        state = state,
+                        reporterState = reporterState,
+                        onReporterEnabledChanged = controller::onReporterEnabledChanged,
+                        onReporterCallsignChanged = controller::onReporterCallsignChanged,
+                        onReporterGridChanged = controller::onReporterGridChanged,
+                        onReporterMessageChanged = controller::onReporterMessageChanged,
+                        onReporterManualFrequencyChanged = controller::onReporterManualFrequencyChanged,
+                        onReporterFrequencyPresetSelected = controller::onReporterFrequencyPresetSelected,
+                        onReporterSendMessage = controller::onReporterSendMessage,
+                        onReporterRxOnlyChanged = controller::onReporterRxOnlyChanged,
+                        modifier = Modifier.padding(padding)
+                    )
+
                     AppPage.LOGS -> LogsPage(
                         logs = state.logs,
                         modifier = Modifier.padding(padding)
@@ -145,6 +162,7 @@ fun RadexApp(
 private fun pageTitle(page: AppPage): String = when (page) {
     AppPage.HOME -> "Home"
     AppPage.SETTINGS -> "Settings"
+    AppPage.REPORTER -> "Reporter"
     AppPage.LOGS -> "Logs"
 }
 
@@ -165,6 +183,7 @@ private fun HomePage(
     Column(
         modifier = modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -331,6 +350,16 @@ private fun SettingsPage(
     onAgcStrengthChanged: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var rigPresetExpanded by rememberSaveable { mutableStateOf(false) }
+    val rigFreqPresets = remember {
+        listOf(
+            "1.8700", "3.6250", "3.6430", "3.6930", "3.6970", "3.8030",
+            "5.4035", "5.3665", "5.3685", "7.1770", "7.1970", "14.2360",
+            "14.2400", "18.1180", "21.3130", "24.9330", "28.3300", "28.7200",
+            "10,489.6400"
+        )
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -521,13 +550,40 @@ private fun SettingsPage(
                             color = Color(0xFF5C7388),
                             style = MaterialTheme.typography.bodySmall
                         )
-                        androidx.compose.material3.OutlinedTextField(
-                            value = state.rigFrequencyText,
-                            onValueChange = onRigFrequencyTextChanged,
+                        Row(
                             modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Rig frequency (MHz)") },
-                            singleLine = true
-                        )
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(
+                                onClick = { rigPresetExpanded = true },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Preset")
+                            }
+                            DropdownMenu(
+                                expanded = rigPresetExpanded,
+                                onDismissRequest = { rigPresetExpanded = false },
+                                modifier = Modifier.heightIn(max = 320.dp)
+                            ) {
+                                rigFreqPresets.forEach { freq ->
+                                    DropdownMenuItem(
+                                        text = { Text(freq, color = Color(0xFF12202F)) },
+                                        onClick = {
+                                            rigPresetExpanded = false
+                                            onRigFrequencyTextChanged(freq.replace(",", ""))
+                                        }
+                                    )
+                                }
+                            }
+                            androidx.compose.material3.OutlinedTextField(
+                                value = state.rigFrequencyText,
+                                onValueChange = onRigFrequencyTextChanged,
+                                modifier = Modifier.weight(1.3f),
+                                label = { Text("Rig freq") },
+                                singleLine = true
+                            )
+                        }
                         Text(
                             text = state.rigCurrentFreqHz?.let { "Rig reports %.6f MHz".format(it / 1_000_000.0) } ?: "Rig frequency not read yet",
                             color = Color(0xFF5C7388),
@@ -733,6 +789,358 @@ private fun LogsPage(
             )
         }
     }
+}
+
+@Composable
+private fun ReporterPage(
+    state: AppUiState,
+    reporterState: com.byf3332.radexcvr.ReporterUiState,
+    onReporterEnabledChanged: (Boolean) -> Unit,
+    onReporterCallsignChanged: (String) -> Unit,
+    onReporterGridChanged: (String) -> Unit,
+    onReporterMessageChanged: (String) -> Unit,
+    onReporterManualFrequencyChanged: (String) -> Unit,
+    onReporterFrequencyPresetSelected: (String) -> Unit,
+    onReporterSendMessage: () -> Unit,
+    onReporterRxOnlyChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val lastMessageBySid = remember { mutableStateMapOf<String, String>() }
+    val pinkUntilBySid = remember { mutableStateMapOf<String, Long>() }
+    val reporterFreqPresets = remember {
+        listOf(
+            "1.8700", "3.6250", "3.6430", "3.6930", "3.6970", "3.8030",
+            "5.4035", "5.3665", "5.3685", "7.1770", "7.1970", "14.2360",
+            "14.2400", "18.1180", "21.3130", "24.9330", "28.3300", "28.7200",
+            "10,489.6400"
+        )
+    }
+    var presetExpanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(reporterState.stations) {
+        val now = System.currentTimeMillis()
+        reporterState.stations.forEach { station ->
+            val previous = lastMessageBySid[station.sid]
+            val current = station.message.trim()
+            if (previous != null && current.isNotBlank() && previous != current) {
+                pinkUntilBySid[station.sid] = now + 5_000L
+            }
+            lastMessageBySid[station.sid] = current
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFDFEFF))) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "FreeDV Reporter",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    color = Color(0xFF12202F)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Enable",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color(0xFF12202F)
+                    )
+                    Switch(
+                        checked = state.reporterEnabled,
+                        onCheckedChange = onReporterEnabledChanged
+                    )
+                }
+                Text(
+                    text = if (state.reporterEnabled) {
+                        if (reporterState.connected) "Connected" else "Connecting/Disconnected"
+                    } else "Disabled",
+                    color = if (reporterState.connected) Color(0xFF246B3D) else Color(0xFF5D7286),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                OutlinedTextField(
+                    value = state.reporterCallsign,
+                    onValueChange = onReporterCallsignChanged,
+                    label = { Text("Callsign") },
+                    singleLine = true,
+                    enabled = state.reporterEnabled,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = state.reporterGridSquare,
+                    onValueChange = onReporterGridChanged,
+                    label = { Text("Grid Square") },
+                    singleLine = true,
+                    enabled = state.reporterEnabled,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = state.reporterMessage,
+                        onValueChange = onReporterMessageChanged,
+                        label = { Text("Message") },
+                        singleLine = true,
+                        enabled = state.reporterEnabled,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedButton(
+                        onClick = onReporterSendMessage,
+                        enabled = state.reporterEnabled
+                    ) {
+                        Text("SEND")
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "RX Only",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color(0xFF12202F)
+                    )
+                    Switch(
+                        checked = state.reporterRxOnly,
+                        onCheckedChange = onReporterRxOnlyChanged
+                    )
+                }
+
+                if (state.rigControlMode != RigControlMode.CAT) {
+                    Text(
+                        text = "Reporter Frequency (MHz)",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color(0xFF12202F)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = { presetExpanded = true },
+                            enabled = state.reporterEnabled,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Preset")
+                        }
+                        DropdownMenu(
+                            expanded = presetExpanded && state.reporterEnabled,
+                            onDismissRequest = { presetExpanded = false },
+                            modifier = Modifier.heightIn(max = 320.dp)
+                        ) {
+                            reporterFreqPresets.forEach { freq ->
+                                DropdownMenuItem(
+                                    text = { Text(freq, color = Color(0xFF12202F)) },
+                                    onClick = {
+                                        presetExpanded = false
+                                        onReporterFrequencyPresetSelected(freq.replace(",", ""))
+                                    }
+                                )
+                            }
+                        }
+                        OutlinedTextField(
+                            value = state.reporterManualFreqMHz,
+                            onValueChange = onReporterManualFrequencyChanged,
+                            label = { Text("MHz") },
+                            singleLine = true,
+                            enabled = state.reporterEnabled,
+                            modifier = Modifier.weight(1.3f)
+                        )
+                    }
+                }
+            }
+        }
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFFDFEFF))
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Stations (${reporterState.stations.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color(0xFF12202F)
+                )
+                if (reporterState.stations.isEmpty()) {
+                    Text(
+                        text = "No stations yet",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF5D7286)
+                    )
+                } else {
+                    val hScroll = rememberScrollState()
+                    val rowHeight = 34.dp
+                    val maxVisibleRows = 20
+                    val visibleRows = reporterState.stations.size.coerceAtMost(maxVisibleRows)
+                    val tableBodyHeight = rowHeight * visibleRows
+                    val colWCallsign = 96.dp
+                    val colWLocator = 80.dp
+                    val colWKm = 64.dp
+                    val colWHdg = 64.dp
+                    val colWVersion = 190.dp
+                    val colWMhz = 92.dp
+                    val colWMode = 72.dp
+                    val colWStatus = 72.dp
+                    val colWMsg = 220.dp
+                    val colWLastTx = 128.dp
+                    val colWRxCall = 92.dp
+                    val colWSnr = 64.dp
+                    val colWLastUpdate = 170.dp
+
+                    Row(
+                        modifier = Modifier
+                            .horizontalScroll(hScroll)
+                            .background(Color(0xFFEFF3F8))
+                            .padding(vertical = 6.dp)
+                    ) {
+                        ReporterCell("Callsign", colWCallsign, true)
+                        ReporterCell("Locator", colWLocator, true)
+                        ReporterCell("km", colWKm, true)
+                        ReporterCell("Hdg", colWHdg, true)
+                        ReporterCell("Version", colWVersion, true)
+                        ReporterCell("MHz", colWMhz, true)
+                        ReporterCell("Mode", colWMode, true)
+                        ReporterCell("Status", colWStatus, true)
+                        ReporterCell("Msg", colWMsg, true)
+                        ReporterCell("Last TX", colWLastTx, true)
+                        ReporterCell("RX Call", colWRxCall, true)
+                        ReporterCell("SNR", colWSnr, true)
+                        ReporterCell("Last Update", colWLastUpdate, true)
+                    }
+
+                    if (reporterState.stations.size <= maxVisibleRows) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(tableBodyHeight)
+                        ) {
+                            reporterState.stations.forEach { row ->
+                                val now = System.currentTimeMillis()
+                                val isPink = (pinkUntilBySid[row.sid] ?: 0L) > now
+                                val rowBackground = when {
+                                    isPink -> Color(0xFFD28CD5)
+                                    row.status == "TX" -> Color(0xFFFF5400)
+                                    row.status == "RX" -> Color(0xFF43A6BD)
+                                    else -> Color(0xFFFFFFFF)
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .horizontalScroll(hScroll)
+                                        .background(rowBackground)
+                                        .padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    ReporterCell(normalizeReporterCallsign(row.callsign), colWCallsign)
+                                    ReporterCell(if (row.gridSquare.isBlank()) "--" else row.gridSquare, colWLocator)
+                                    ReporterCell("--", colWKm)
+                                    ReporterCell("--", colWHdg)
+                                    ReporterCell(if (row.version.isBlank()) "--" else row.version, colWVersion)
+                                    ReporterCell(if (row.frequencyHz > 0) String.format("%.4f", row.frequencyHz / 1_000_000.0) else "0.0000", colWMhz)
+                                    ReporterCell(if (row.mode.isBlank()) "--" else row.mode, colWMode)
+                                    ReporterCell(row.status, colWStatus)
+                                    ReporterCell(if (row.message.isBlank()) "--" else row.message, colWMsg)
+                                    ReporterCell(if (row.lastTx.isBlank()) "--" else row.lastTx, colWLastTx)
+                                    ReporterCell(if (row.lastRxCallsign.isBlank()) "--" else row.lastRxCallsign, colWRxCall)
+                                    ReporterCell(if (row.snr.isBlank()) "--" else row.snr, colWSnr)
+                                    ReporterCell(if (row.lastUpdate.isBlank()) "--" else row.lastUpdate, colWLastUpdate)
+                                }
+                            }
+                        }
+                    } else {
+                        val tableVScroll = rememberScrollState()
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(tableBodyHeight)
+                                .verticalScroll(tableVScroll)
+                        ) {
+                            reporterState.stations.forEach { row ->
+                                val now = System.currentTimeMillis()
+                                val isPink = (pinkUntilBySid[row.sid] ?: 0L) > now
+                                val rowBackground = when {
+                                    isPink -> Color(0xFFD28CD5)
+                                    row.status == "TX" -> Color(0xFFFF5400)
+                                    row.status == "RX" -> Color(0xFF43A6BD)
+                                    else -> Color(0xFFFFFFFF)
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .horizontalScroll(hScroll)
+                                        .background(rowBackground)
+                                        .padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    ReporterCell(normalizeReporterCallsign(row.callsign), colWCallsign)
+                                    ReporterCell(if (row.gridSquare.isBlank()) "--" else row.gridSquare, colWLocator)
+                                    ReporterCell("--", colWKm)
+                                    ReporterCell("--", colWHdg)
+                                    ReporterCell(if (row.version.isBlank()) "--" else row.version, colWVersion)
+                                    ReporterCell(if (row.frequencyHz > 0) String.format("%.4f", row.frequencyHz / 1_000_000.0) else "0.0000", colWMhz)
+                                    ReporterCell(if (row.mode.isBlank()) "--" else row.mode, colWMode)
+                                    ReporterCell(row.status, colWStatus)
+                                    ReporterCell(if (row.message.isBlank()) "--" else row.message, colWMsg)
+                                    ReporterCell(if (row.lastTx.isBlank()) "--" else row.lastTx, colWLastTx)
+                                    ReporterCell(if (row.lastRxCallsign.isBlank()) "--" else row.lastRxCallsign, colWRxCall)
+                                    ReporterCell(if (row.snr.isBlank()) "--" else row.snr, colWSnr)
+                                    ReporterCell(if (row.lastUpdate.isBlank()) "--" else row.lastUpdate, colWLastUpdate)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReporterCell(
+    text: String,
+    width: androidx.compose.ui.unit.Dp,
+    header: Boolean = false
+) {
+    Text(
+        text = text,
+        modifier = Modifier
+            .width(width)
+            .padding(horizontal = 8.dp)
+            .then(if (header) Modifier else Modifier.basicMarquee()),
+        maxLines = 1,
+        overflow = if (header) TextOverflow.Ellipsis else TextOverflow.Visible,
+        style = if (header) {
+            MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+        } else {
+            MaterialTheme.typography.bodyMedium
+        },
+        color = Color(0xFF12202F)
+    )
+}
+
+private fun normalizeReporterCallsign(raw: String): String {
+    val s = raw.trim().uppercase()
+    return if (s.isBlank()) "N/A" else s
 }
 
 @Composable

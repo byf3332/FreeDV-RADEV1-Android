@@ -11,6 +11,9 @@ object NativeRadioBridge {
         outputBaseband80: ShortArray
     ): Int
     external fun stopTx()
+    external fun setTxCallsign(callsign: String)
+    external fun appendTxEoo(): Int
+    external fun drainTxQueuedFrame(outputBaseband80: ShortArray): Int
 
     external fun startRxAudio(): Int
     external fun processRxBasebandFrame(
@@ -23,5 +26,6 @@ object NativeRadioBridge {
     external fun getRxSyncNative(): Int
     external fun getRxSnrNative(): Int
     external fun getRxFreqOffsetNative(): Float
+    external fun pollRxCallsign(): String?
     external fun setRxManualOffsetNative(offsetHz: Float)
 }

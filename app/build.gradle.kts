@@ -2,7 +2,6 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
-
 android {
     namespace = "com.byf3332.radexcvr"
     compileSdk = 36
@@ -12,7 +11,7 @@ android {
         minSdk = 27
         targetSdk = 34
         versionCode = 3
-        versionName = "1.2.0"
+        versionName = "1.3.0"
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -93,8 +92,10 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(platform(libs.androidx.compose.bom))
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.github.mik3y:usb-serial-for-android:3.9.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

@@ -27,6 +27,7 @@ import com.byf3332.radexcvr.cat.Ft8CnRigCatalog
 import com.byf3332.radexcvr.cat.Ft8CnRigFactory
 import com.byf3332.radexcvr.cat.Ft8CnRigProfile
 import com.byf3332.radexcvr.cat.Ft8CnUsbRigConnector
+import com.byf3332.radexcvr.network.FreeDvReporterClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -54,6 +55,7 @@ import kotlin.math.sqrt
 enum class AppPage {
     HOME,
     SETTINGS,
+    REPORTER,
     LOGS
 }
 
@@ -103,6 +105,27 @@ data class DeviceSelectionUiState(
     val rxOutputId: Int? = null
 )
 
+data class ReporterStationUi(
+    val sid: String,
+    val callsign: String,
+    val gridSquare: String,
+    val version: String,
+    val frequencyHz: Long,
+    val mode: String,
+    val status: String,
+    val message: String,
+    val lastTx: String,
+    val lastRxCallsign: String,
+    val snr: String,
+    val lastUpdate: String
+)
+
+data class ReporterUiState(
+    val connected: Boolean = false,
+    val status: String = "Disconnected",
+    val stations: List<ReporterStationUi> = emptyList()
+)
+
 data class AppUiState(
     val currentPage: AppPage = AppPage.HOME,
     val logs: List<String> = emptyList(),
@@ -146,7 +169,14 @@ data class AppUiState(
     val rigConnected: Boolean = false,
     val rigCurrentFreqHz: Long? = null,
     val rigPttActive: Boolean = false,
-    val waterfall: List<List<Float>> = emptyList()
+    val waterfall: List<List<Float>> = emptyList(),
+    val reporterEnabled: Boolean = false,
+    val reporterConnected: Boolean = false,
+    val reporterCallsign: String = "",
+    val reporterGridSquare: String = "",
+    val reporterMessage: String = "",
+    val reporterRxOnly: Boolean = true,
+    val reporterManualFreqMHz: String = ""
 )
 
 class RadioSessionController(
@@ -165,6 +195,12 @@ class RadioSessionController(
         private const val PREF_SERIAL_BAUD_RATE = "serial_baud_rate"
         private const val PREF_RIG_PROFILE_KEY = "rig_profile_key"
         private const val PREF_RIG_CIV_ADDRESS = "rig_civ_address"
+        private const val PREF_REPORTER_ENABLED = "reporter_enabled"
+        private const val PREF_REPORTER_CALLSIGN = "reporter_callsign"
+        private const val PREF_REPORTER_GRID = "reporter_grid"
+        private const val PREF_REPORTER_MESSAGE = "reporter_message"
+        private const val PREF_REPORTER_RX_ONLY = "reporter_rx_only"
+        private const val PREF_REPORTER_MANUAL_FREQ_MHZ = "reporter_manual_freq_mhz"
         private const val SPEECH_SR = 16000
         private const val BASEBAND_SR = 8000
         private const val SPEECH_FRAME = 160
@@ -187,10 +223,17 @@ class RadioSessionController(
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val appVersionName: String = runCatching {
+        val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+        pInfo.versionName ?: "dev"
+    }.getOrDefault("dev")
     private val usbSerialController = UsbSerialController(usbManager)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val reporterClient = FreeDvReporterClient(scope)
     private val _uiState = MutableStateFlow(AppUiState())
     val uiState: StateFlow<AppUiState> = _uiState.asStateFlow()
+    private val _reporterUiState = MutableStateFlow(ReporterUiState())
+    val reporterUiState: StateFlow<ReporterUiState> = _reporterUiState.asStateFlow()
     private val _meterState = MutableStateFlow(MeterUiState())
     val meterState: StateFlow<MeterUiState> = _meterState.asStateFlow()
 
@@ -201,6 +244,7 @@ class RadioSessionController(
     @Volatile private var pendingStartAfterPermission = false
     @Volatile private var running = false
     @Volatile private var pttDown = false
+    @Volatile private var txReleaseInProgress = false
     @Volatile private var rxResyncInProgress = false
     @Volatile private var mode = SessionMode.IDLE
     @Volatile private var switchToken = 0L
@@ -339,6 +383,7 @@ class RadioSessionController(
                     rigStatusText = "Frequency read from rig"
                 )
             }
+            reporterClient.emitFreqChange(freq)
         }
 
         override fun onRunError(message: String?) {
@@ -368,6 +413,60 @@ class RadioSessionController(
         probeUsbSerialDevices()
         addLog("Ready")
         nativeBridge.setRxManualOffsetNative(0f)
+        syncNativeTxCallsignForEoo()
+
+        scope.launch(Dispatchers.Default) {
+            reporterClient.connected.collect { connected ->
+                _reporterUiState.update {
+                    it.copy(
+                        connected = connected,
+                        status = if (connected) "Connected" else "Disconnected"
+                    )
+                }
+                _uiState.update { it.copy(reporterConnected = connected) }
+                if (connected) {
+                    emitReporterFrequencySnapshot()
+                    reporterClient.emitTxReport("RADEV1", false)
+                }
+            }
+        }
+        scope.launch(Dispatchers.Default) {
+            reporterClient.stations.collect { map ->
+                val rawRows = map.values.map { s ->
+                    ReporterStationUi(
+                        sid = s.sid,
+                        callsign = s.callsign,
+                        gridSquare = s.gridSquare,
+                        version = s.version,
+                        frequencyHz = s.frequencyHz,
+                        mode = s.mode,
+                        status = when {
+                            s.transmitting -> "TX"
+                            s.rxOnly -> "RX Only"
+                            else -> "RX"
+                        },
+                        message = s.message,
+                        lastTx = s.lastTx,
+                        lastRxCallsign = s.lastRxCallsign,
+                        snr = s.snr,
+                        lastUpdate = s.lastUpdate
+                    )
+                }
+
+                val ourCallsign = _uiState.value.reporterCallsign.trim().uppercase()
+                val dedupedRows = if (ourCallsign.isBlank()) {
+                    rawRows
+                } else {
+                    val (ours, others) = rawRows.partition { it.callsign.trim().uppercase() == ourCallsign }
+                    val latestOurs = ours.maxByOrNull { it.lastUpdate }
+                    if (latestOurs != null) others + latestOurs else others
+                }
+
+                val rows = dedupedRows.sortedBy { it.callsign.ifBlank { it.sid } }
+                _reporterUiState.update { it.copy(stations = rows) }
+            }
+        }
+        applyReporterConfigFromState()
     }
 
     fun selectPage(page: AppPage) {
@@ -813,6 +912,79 @@ class RadioSessionController(
         _uiState.update { it.copy(agcEnabled = enabled) }
         prefs.edit().putBoolean(PREF_AGC_ENABLED, enabled).apply()
     }
+    fun onReporterEnabledChanged(enabled: Boolean) {
+        _uiState.update { it.copy(reporterEnabled = enabled) }
+        prefs.edit().putBoolean(PREF_REPORTER_ENABLED, enabled).apply()
+        applyReporterConfigFromState()
+    }
+
+    fun onReporterCallsignChanged(value: String) {
+        if (!_uiState.value.reporterEnabled) return
+        val normalized = value.trim().uppercase().filter { it.isLetterOrDigit() || it == '/' }
+        _uiState.update { it.copy(reporterCallsign = normalized) }
+        prefs.edit().putString(PREF_REPORTER_CALLSIGN, normalized).apply()
+        syncNativeTxCallsignForEoo()
+        applyReporterConfigFromState()
+    }
+
+    fun onReporterGridChanged(value: String) {
+        if (!_uiState.value.reporterEnabled) return
+        val normalized = value.trim().uppercase().filter { it.isLetterOrDigit() }
+        _uiState.update { it.copy(reporterGridSquare = normalized) }
+        prefs.edit().putString(PREF_REPORTER_GRID, normalized).apply()
+        applyReporterConfigFromState()
+    }
+
+    fun onReporterMessageChanged(value: String) {
+        if (!_uiState.value.reporterEnabled) return
+        val normalized = value.take(80)
+        _uiState.update { it.copy(reporterMessage = normalized) }
+        prefs.edit().putString(PREF_REPORTER_MESSAGE, normalized).apply()
+    }
+
+    fun onReporterManualFrequencyChanged(value: String) {
+        val filtered = value.filter { it.isDigit() || it == '.' }
+        val normalized = buildString {
+            var dotSeen = false
+            for (ch in filtered) {
+                if (ch == '.') {
+                    if (dotSeen) continue
+                    dotSeen = true
+                }
+                append(ch)
+            }
+        }
+        _uiState.update { it.copy(reporterManualFreqMHz = normalized) }
+        prefs.edit().putString(PREF_REPORTER_MANUAL_FREQ_MHZ, normalized).apply()
+        applyReporterConfigFromState()
+    }
+
+    fun onReporterFrequencyPresetSelected(valueMHz: String) {
+        _uiState.update { it.copy(reporterManualFreqMHz = valueMHz) }
+        prefs.edit().putString(PREF_REPORTER_MANUAL_FREQ_MHZ, valueMHz).apply()
+        applyReporterConfigFromState()
+    }
+
+    fun onReporterSendMessage() {
+        val state = _uiState.value
+        if (!state.reporterEnabled) {
+            _reporterUiState.update { it.copy(status = "Please enable reporter first") }
+            addLog("Reporter: enable switch is OFF")
+            return
+        }
+        reporterClient.emitMessageUpdate(state.reporterMessage)
+    }
+
+    fun onReporterRxOnlyChanged(value: Boolean) {
+        if (!_uiState.value.reporterEnabled) {
+            _reporterUiState.update { it.copy(status = "Please enable reporter first") }
+            addLog("Reporter: enable switch is OFF")
+            return
+        }
+        _uiState.update { it.copy(reporterRxOnly = value) }
+        prefs.edit().putBoolean(PREF_REPORTER_RX_ONLY, value).apply()
+        applyReporterConfigFromState()
+    }
     fun onRigCivAddressChanged(value: String) {
         val sanitized = value.trim().uppercase().filter { it.isDigit() || it in 'A'..'F' }
         _uiState.update { it.copy(rigCivAddress = sanitized) }
@@ -977,6 +1149,7 @@ class RadioSessionController(
 
         SessionKeepAliveService.start(context)
         startRxFull(switchToken)
+        reporterClient.emitTxReport("RADEV1", false)
         addLog("Session started")
     }
 
@@ -985,6 +1158,7 @@ class RadioSessionController(
             if (!running && mode == SessionMode.IDLE) return
             running = false
             pttDown = false
+            txReleaseInProgress = false
             mode = SessionMode.IDLE
             rxResyncInProgress = false
             switchToken++
@@ -1042,10 +1216,12 @@ class RadioSessionController(
 
     fun onPttPressed() {
         synchronized(stateLock) {
-            if (!running || pttDown) return
+            if (!running || pttDown || txReleaseInProgress) return
             pttDown = true
+            txReleaseInProgress = false
             switchToken++
         }
+        emitReporterFrequencySnapshot()
 
         val token = switchToken
         smoothedMicDb = -50.0
@@ -1060,6 +1236,7 @@ class RadioSessionController(
         displayedMicColor = 0xFF4CAF50.toInt()
         publishMode(SessionMode.TX_PREPARING, 0xFF1976D2.toInt())
         publishMeter(targetMicMeter)
+        syncNativeTxCallsignForEoo()
 
         thread(name = "ptt-press") {
             addLog("TX preparing...")
@@ -1102,21 +1279,86 @@ class RadioSessionController(
     }
 
     fun onPttReleased() {
+        val token: Long
         synchronized(stateLock) {
-            if (!running || !pttDown) return
-            pttDown = false
-            switchToken++
+            if (!running || !pttDown || txReleaseInProgress) return
+            txReleaseInProgress = true
+            token = switchToken
         }
 
-        val token = switchToken
         stopMeterUiTicker()
 
         thread(name = "ptt-release") {
+            syncNativeTxCallsignForEoo()
+            // Match reference behavior: stop feeding new mic frames before appending EOO.
+            txThread?.join(300)
+
+            val eooSamples = nativeBridge.appendTxEoo()
+            if (eooSamples > 0) {
+                addLog("EOO queued ($eooSamples samples)")
+            } else {
+                addLog("EOO skipped (empty callsign or unavailable)")
+            }
+            val playbackQueue = txPlaybackQueue
+            if (playbackQueue != null) {
+                val chunk = ShortArray(BASEBAND_FRAME)
+                var idleRounds = 0
+                val maxRounds = 600
+                var rounds = 0
+                while (rounds < maxRounds) {
+                    val had = nativeBridge.drainTxQueuedFrame(chunk)
+                    if (had > 0) {
+                        val copy = chunk.copyOf()
+                        if (!playbackQueue.offer(copy)) {
+                            playbackQueue.poll()
+                            playbackQueue.offer(copy)
+                        }
+                        idleRounds = 0
+                    } else {
+                        idleRounds++
+                        if (idleRounds >= 6) break
+                        Thread.sleep(10)
+                    }
+                    rounds++
+                }
+                // Match FreeDV desktop behavior: append 60 ms of post-EOO silence.
+                repeat(6) {
+                    val silence = ShortArray(BASEBAND_FRAME)
+                    if (!playbackQueue.offer(silence)) {
+                        playbackQueue.poll()
+                        playbackQueue.offer(silence)
+                    }
+                }
+            }
+
+            val baseHoldMs = ((eooSamples / 8L) + 120L).coerceIn(140L, 1000L)
+            Thread.sleep(baseHoldMs)
+
+            val queueWaitStart = System.currentTimeMillis()
+            while ((txPlaybackQueue?.isNotEmpty() == true) &&
+                System.currentTimeMillis() - queueWaitStart < 1800L
+            ) {
+                Thread.sleep(10)
+            }
+            reporterClient.emitTxReport("RADEV1", false)
+
+            val nextToken: Long
+            synchronized(stateLock) {
+                if (!running || token != switchToken) {
+                    txReleaseInProgress = false
+                    return@thread
+                }
+                pttDown = false
+                txReleaseInProgress = false
+                switchToken++
+                nextToken = switchToken
+            }
+
             stopTxInternal()
             setRigPttImmediate(false)
 
-            if (running && token == switchToken) {
-                startRxFull(token)
+            if (running && nextToken == switchToken) {
+                startRxFull(nextToken)
                 mode = SessionMode.RX
                 publishMode(SessionMode.RX, 0xFF9E9E9E.toInt())
                 addLog("RX standby")
@@ -1264,9 +1506,49 @@ class RadioSessionController(
                 rigCivAddress = prefs.getString(PREF_RIG_CIV_ADDRESS, it.rigCivAddress) ?: it.rigCivAddress,
                 agcEnabled = prefs.getBoolean(PREF_AGC_ENABLED, it.agcEnabled),
                 agcClipDb = prefs.getFloat(PREF_AGC_CLIP_DB, it.agcClipDb).coerceIn(-18f, 0f),
-                agcStrength = prefs.getFloat(PREF_AGC_STRENGTH, it.agcStrength).coerceIn(0f, 1.5f)
+                agcStrength = prefs.getFloat(PREF_AGC_STRENGTH, it.agcStrength).coerceIn(0f, 1.5f),
+                reporterEnabled = prefs.getBoolean(PREF_REPORTER_ENABLED, it.reporterEnabled),
+                reporterCallsign = prefs.getString(PREF_REPORTER_CALLSIGN, it.reporterCallsign) ?: it.reporterCallsign,
+                reporterGridSquare = prefs.getString(PREF_REPORTER_GRID, it.reporterGridSquare) ?: it.reporterGridSquare,
+                reporterMessage = prefs.getString(PREF_REPORTER_MESSAGE, it.reporterMessage) ?: it.reporterMessage,
+                reporterRxOnly = prefs.getBoolean(PREF_REPORTER_RX_ONLY, it.reporterRxOnly),
+                reporterManualFreqMHz = prefs.getString(PREF_REPORTER_MANUAL_FREQ_MHZ, it.reporterManualFreqMHz) ?: it.reporterManualFreqMHz
             )
         }
+    }
+
+    private fun applyReporterConfigFromState() {
+        val state = _uiState.value
+        reporterClient.updateConfig(
+            FreeDvReporterClient.Config(
+                enabled = state.reporterEnabled,
+                callsign = state.reporterCallsign,
+                gridSquare = state.reporterGridSquare,
+                version = "RADEXCVR/$appVersionName",
+                rxOnly = state.reporterRxOnly
+            )
+        )
+        syncNativeTxCallsignForEoo()
+        emitReporterFrequencySnapshot()
+    }
+
+    private fun syncNativeTxCallsignForEoo() {
+        val state = _uiState.value
+        nativeBridge.setTxCallsign(if (state.reporterEnabled) state.reporterCallsign else "")
+    }
+
+    private fun currentReporterFrequencyHz(): Long? {
+        val state = _uiState.value
+        return if (state.rigControlMode == RigControlMode.CAT) {
+            state.rigCurrentFreqHz
+        } else {
+            val mhz = state.reporterManualFreqMHz.toDoubleOrNull()
+            if (mhz != null && mhz > 0) (mhz * 1_000_000.0).toLong() else null
+        }
+    }
+
+    private fun emitReporterFrequencySnapshot() {
+        currentReporterFrequencyHz()?.let { reporterClient.emitFreqChange(it) }
     }
 
     private fun ft8CnControlMode(mode: RigControlMode): Int {
@@ -1862,6 +2144,12 @@ class RadioSessionController(
                 if (ret < 0) {
                     out160.fill(0)
                 }
+                val rxCallsign = synchronized(nativeRxLock) { nativeBridge.pollRxCallsign() }
+                if (!rxCallsign.isNullOrBlank()) {
+                    addLog("EOO callsign decoded: $rxCallsign")
+                    val snrForReport = synchronized(nativeRxLock) { nativeBridge.getRxSnrNative() }
+                    reporterClient.emitRxReport(rxCallsign, snrForReport, "RADEV1")
+                }
 
                 try {
                     player.write(out160, 0, out160.size)
@@ -1960,6 +2248,7 @@ class RadioSessionController(
                     if (!txHasStarted && hasBaseband) {
                         txHasStarted = true
                         startMeterUiTicker()
+                        reporterClient.emitTxReport("RADEV1", true)
                         _uiState.update {
                             it.copy(
                                 mode = SessionMode.TX,
@@ -1981,6 +2270,7 @@ class RadioSessionController(
             val out80 = ShortArray(BASEBAND_FRAME)
 
             while (running && pttDown && token == switchToken) {
+                if (txReleaseInProgress) break
                 if (txRecorder !== recorder || txPlayer !== player) break
 
                 try {

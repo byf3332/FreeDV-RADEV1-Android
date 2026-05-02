@@ -57,6 +57,13 @@ add_library(rade STATIC
         celt/vq.c
 )
 
+# ---------- EOO codec ----------
+
+add_library(eoo STATIC
+        eoo/EooCallsignCodec.cpp
+        eoo/eoo_callsign_codec_c.cpp
+)
+
 # ---------- JNI ----------
 
 add_library(radexcvr SHARED
@@ -74,6 +81,7 @@ target_include_directories(rade PRIVATE
 
 target_include_directories(radexcvr PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/eoo
         ${CMAKE_CURRENT_SOURCE_DIR}/celt
         ${CMAKE_CURRENT_SOURCE_DIR}/opus
         ${CMAKE_CURRENT_SOURCE_DIR}/dnn
@@ -91,6 +99,7 @@ find_library(log-lib log)
 
 target_link_libraries(radexcvr
         rade
+        eoo
         ${log-lib}
         m
 )

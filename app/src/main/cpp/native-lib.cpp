@@ -4,11 +4,14 @@
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
+#include <string>
+#include <vector>
 
 extern "C" {
 #include "rade/rade_api.h"
 #include "dnn/lpcnet.h"
 #include "dnn/fargan.h"
+#include "eoo/eoo_callsign_codec_c.h"
 }
 
 static short clamp_pcm16(float x) {
@@ -21,6 +24,8 @@ static float pcm16_to_float(short x) {
     return ((float)x) / 32768.0f;
 }
 
+static constexpr float TX_SCALING = 16383.0f;
+
 /* =========================
  * TX state
  * 16 kHz speech -> 8 kHz real baseband
@@ -32,6 +37,7 @@ static int g_tx_started = 0;
 
 static int g_tx_n_features = 0;
 static int g_tx_n_tx = 0;
+static int g_tx_n_eoo = 0;
 static int g_tx_block_idx = 0;
 
 static float* g_tx_features_accum = nullptr;
@@ -39,6 +45,7 @@ static RADE_COMP* g_tx_buf = nullptr;
 
 static short g_tx_out_queue[80 * 64];
 static int g_tx_out_queue_len = 0;
+static std::string g_tx_callsign;
 
 static void tx_queue_reset() {
     g_tx_out_queue_len = 0;
@@ -50,14 +57,15 @@ static void tx_queue_push80(const short* x80) {
     g_tx_out_queue_len += 80;
 }
 
-static void tx_queue_pop80(short* out80) {
+static int tx_queue_pop80(short* out80) {
     if (g_tx_out_queue_len < 80) {
         memset(out80, 0, sizeof(short) * 80);
-        return;
+        return 0;
     }
     memcpy(out80, g_tx_out_queue, sizeof(short) * 80);
     memmove(g_tx_out_queue, g_tx_out_queue + 80, sizeof(short) * (g_tx_out_queue_len - 80));
     g_tx_out_queue_len -= 80;
+    return 1;
 }
 
 extern "C"
@@ -88,6 +96,7 @@ Java_com_byf3332_radexcvr_NativeRadioBridge_startTxMic(
 
     g_tx_n_features = rade_n_features_in_out(g_tx_r);
     g_tx_n_tx = rade_n_tx_out(g_tx_r);
+    g_tx_n_eoo = rade_n_eoo_bits(g_tx_r);
 
     g_tx_features_accum = (float*)malloc(sizeof(float) * g_tx_n_features);
     g_tx_buf = (RADE_COMP*)malloc(sizeof(RADE_COMP) * g_tx_n_tx);
@@ -111,9 +120,61 @@ Java_com_byf3332_radexcvr_NativeRadioBridge_startTxMic(
     memset(g_tx_features_accum, 0, sizeof(float) * g_tx_n_features);
     g_tx_block_idx = 0;
     tx_queue_reset();
-
     g_tx_started = 1;
     return 0;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_byf3332_radexcvr_NativeRadioBridge_setTxCallsign(
+        JNIEnv* env,
+        jobject,
+        jstring callsign)
+{
+    if (callsign == nullptr) {
+        g_tx_callsign.clear();
+        return;
+    }
+    const char* cs = env->GetStringUTFChars(callsign, nullptr);
+    g_tx_callsign = cs ? cs : "";
+    env->ReleaseStringUTFChars(callsign, cs);
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_byf3332_radexcvr_NativeRadioBridge_appendTxEoo(
+        JNIEnv*,
+        jobject)
+{
+    if (!g_tx_started || g_tx_r == nullptr || g_tx_callsign.empty() || g_tx_n_eoo <= 0) {
+        return 0;
+    }
+
+    std::vector<float> eooBits(g_tx_n_eoo, 0.0f);
+    eoo_callsign_encode(g_tx_callsign.c_str(), eooBits.data(), g_tx_n_eoo);
+    rade_tx_set_eoo_bits(g_tx_r, eooBits.data());
+
+    const int nEooOut = rade_n_tx_eoo_out(g_tx_r);
+    if (nEooOut <= 0) return 0;
+
+    std::vector<RADE_COMP> eooOut(nEooOut);
+    const int produced = rade_tx_eoo(g_tx_r, eooOut.data());
+    if (produced <= 0) return 0;
+
+    short block80[80] = {0};
+    int idx = 0;
+    for (int i = 0; i < produced; ++i) {
+        block80[idx++] = clamp_pcm16(TX_SCALING * eooOut[i].real);
+        if (idx == 80) {
+            tx_queue_push80(block80);
+            idx = 0;
+        }
+    }
+    if (idx > 0) {
+        for (int i = idx; i < 80; ++i) block80[i] = 0;
+        tx_queue_push80(block80);
+    }
+    return produced;
 }
 
 extern "C"
@@ -149,7 +210,7 @@ Java_com_byf3332_radexcvr_NativeRadioBridge_processTxMicFrame(
             for (int blk = 0; blk < 12; ++blk) {
                 short bb80[80];
                 for (int i = 0; i < 80; ++i) {
-                    float s = 32767.0f * g_tx_buf[blk * 80 + i].real;
+                    float s = TX_SCALING * g_tx_buf[blk * 80 + i].real;
                     bb80[i] = clamp_pcm16(s);
                 }
                 tx_queue_push80(bb80);
@@ -199,8 +260,25 @@ Java_com_byf3332_radexcvr_NativeRadioBridge_stopTx(
     g_tx_started = 0;
     g_tx_n_features = 0;
     g_tx_n_tx = 0;
+    g_tx_n_eoo = 0;
     g_tx_block_idx = 0;
     tx_queue_reset();
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_byf3332_radexcvr_NativeRadioBridge_drainTxQueuedFrame(
+        JNIEnv* env,
+        jobject,
+        jshortArray outputBaseband80)
+{
+    if (!g_tx_started) return -1;
+    if (env->GetArrayLength(outputBaseband80) < 80) return -2;
+
+    jshort* out = env->GetShortArrayElements(outputBaseband80, nullptr);
+    const int had = tx_queue_pop80((short*)out);
+    env->ReleaseShortArrayElements(outputBaseband80, out, 0);
+    return had;
 }
 
 /* =========================
@@ -215,12 +293,14 @@ static int g_rx_warm_count = 0;
 
 static int g_rx_nin = 0;
 static int g_rx_nfeatures = 0;
+static int g_rx_n_eoo = 0;
 
 static RADE_COMP* g_rx_in_buf = nullptr;
 static float* g_rx_features = nullptr;
 static float g_rx_manual_offset_hz = 0.0f;
 static float g_rx_shift_phase = 0.0f;
 static float g_rx_shift_phase_inc = 0.0f;
+static std::string g_rx_last_callsign;
 
 static short g_rx_in_queue[80 * 64];
 static int g_rx_in_queue_len = 0;
@@ -287,6 +367,7 @@ Java_com_byf3332_radexcvr_NativeRadioBridge_startRxAudio(
 
     g_rx_nin = rade_nin(g_rx_r);
     g_rx_nfeatures = rade_n_features_in_out(g_rx_r);
+    g_rx_n_eoo = rade_n_eoo_bits(g_rx_r);
 
     g_rx_in_buf = (RADE_COMP*)malloc(sizeof(RADE_COMP) * g_rx_nin);
     g_rx_features = (float*)malloc(sizeof(float) * g_rx_nfeatures);
@@ -311,6 +392,7 @@ Java_com_byf3332_radexcvr_NativeRadioBridge_startRxAudio(
     g_rx_warm_count = 0;
     rx_in_reset();
     rx_out_reset();
+    g_rx_last_callsign.clear();
 
     g_rx_started = 1;
     return 0;
@@ -345,9 +427,14 @@ Java_com_byf3332_radexcvr_NativeRadioBridge_processRxBasebandFrame(
         while (g_rx_shift_phase < -(float)M_PI) g_rx_shift_phase += 2.0f * (float)M_PI;
 
         int has_eoo_out = 0;
-        float eoo_out[64] = {0};
-
-        int nf = rade_rx(g_rx_r, g_rx_features, &has_eoo_out, eoo_out, g_rx_in_buf);
+        std::vector<float> eoo_out(g_rx_n_eoo > 0 ? g_rx_n_eoo : 64, 0.0f);
+        int nf = rade_rx(g_rx_r, g_rx_features, &has_eoo_out, eoo_out.data(), g_rx_in_buf);
+        if (has_eoo_out && g_rx_n_eoo > 0) {
+            char cs[32] = {0};
+            if (eoo_callsign_decode(eoo_out.data(), g_rx_n_eoo / 2, cs, (int)sizeof(cs) - 1)) {
+                g_rx_last_callsign = cs;
+            }
+        }
 
         if (nf == g_rx_nfeatures) {
             for (int block = 0; block < 12; ++block) {
@@ -423,8 +510,22 @@ Java_com_byf3332_radexcvr_NativeRadioBridge_stopRx(
     g_rx_warm_count = 0;
     g_rx_nin = 0;
     g_rx_nfeatures = 0;
+    g_rx_n_eoo = 0;
     rx_in_reset();
     rx_out_reset();
+    g_rx_last_callsign.clear();
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_com_byf3332_radexcvr_NativeRadioBridge_pollRxCallsign(
+        JNIEnv* env,
+        jobject)
+{
+    if (g_rx_last_callsign.empty()) return nullptr;
+    std::string out = g_rx_last_callsign;
+    g_rx_last_callsign.clear();
+    return env->NewStringUTF(out.c_str());
 }
 
 extern "C"
